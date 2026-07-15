@@ -8,6 +8,7 @@ import {
   deriveSharedKey,
   encryptMessage,
   decryptMessage,
+  computeSafetyNumber,
   randomRoomId,
 } from './crypto.js';
 import { sendToRoom, subscribeToRoom } from './supabase.js';
@@ -18,6 +19,7 @@ export default function App() {
   const [roomId, setRoomId] = useState(null);
   const [myPublicKeyB64, setMyPublicKeyB64] = useState(null);
   const [sharedKey, setSharedKey] = useState(null);
+  const [safetyNumber, setSafetyNumber] = useState(null);
   const [messages, setMessages] = useState([]); // {mine: bool, text: string}
   const [draft, setDraft] = useState('');
   const [error, setError] = useState(null);
@@ -44,6 +46,7 @@ export default function App() {
         const peerPublicKey = await importPeerPublicKey(payload.pubKey);
         const key = await deriveSharedKey(keyPairRef.current.privateKey, peerPublicKey);
         setSharedKey(key);
+        setSafetyNumber(await computeSafetyNumber(myPublicKeyB64, payload.pubKey));
         setScreen('chat');
       }
     });
@@ -56,6 +59,7 @@ export default function App() {
       const peerPublicKey = await importPeerPublicKey(data.pubKey);
       const key = await deriveSharedKey(keyPairRef.current.privateKey, peerPublicKey);
       setSharedKey(key);
+      setSafetyNumber(await computeSafetyNumber(myPublicKeyB64, data.pubKey));
       setRoomId(data.roomId);
 
       // Envoie sa propre clé publique en clair (une clé publique n'est pas un secret)
@@ -108,7 +112,13 @@ export default function App() {
         <Scanner onResult={handleScanResult} onCancel={() => setScreen('home')} error={error} />
       )}
       {screen === 'chat' && (
-        <Chat messages={messages} draft={draft} setDraft={setDraft} onSend={sendMessage} />
+        <Chat
+          messages={messages}
+          draft={draft}
+          setDraft={setDraft}
+          onSend={sendMessage}
+          safetyNumber={safetyNumber}
+        />
       )}
     </div>
   );
@@ -164,12 +174,19 @@ function Scanner({ onResult, onCancel, error }) {
   );
 }
 
-function Chat({ messages, draft, setDraft, onSend }) {
+function Chat({ messages, draft, setDraft, onSend, safetyNumber }) {
   const bottomRef = useRef(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   return (
     <div className="screen chat-screen">
+      {safetyNumber && (
+        <div className="safety-banner">
+          Code de sécurité : <strong>{safetyNumber}</strong>
+          <br />
+          Vérifiez à voix haute qu'il est identique sur les deux téléphones (protection contre l'interception du tout premier échange).
+        </div>
+      )}
       <div className="messages">
         {messages.map((m, i) => (
           <div key={i} className={`bubble ${m.mine ? 'mine' : 'theirs'}`}>{m.text}</div>

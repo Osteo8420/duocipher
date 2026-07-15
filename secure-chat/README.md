@@ -47,12 +47,17 @@ create policy "Anyone can read" on messages
 alter publication supabase_realtime add table messages;
 ```
 
-Note honnête : ces règles sont volontairement permissives (n'importe qui
-connaissant un `room_id` peut lire/écrire dans ce salon) — exactement
-comme un facteur qui accepte de transporter n'importe quelle enveloppe.
-Ce n'est pas un problème de confidentialité puisque le contenu est
-chiffré, mais retenez que le `room_id` doit rester aussi difficile à
-deviner qu'un mot de passe (il l'est : 12 caractères aléatoires).
+Note honnête : ces règles sont volontairement permissives, et plus
+largement que ce qu'on pourrait croire — la policy de lecture (`using
+(true)`) ne filtre pas par `room_id` : quiconque possède la clé anon
+(publique, présente dans le JS déployé) peut lister **toutes** les
+lignes de la table, de tous les salons, pas seulement d'un salon dont il
+connaîtrait le `room_id`. Le contenu reste illisible (chiffré), mais
+l'existence des salons, les clés publiques échangées, les horodatages
+et volumes de messages sont visibles de tout le monde. Ce n'est pas un
+problème de confidentialité des messages, mais c'est une fuite de
+métadonnées plus large que « il faut connaître le room_id » — à garder
+en tête avant de traiter ce relais comme un simple facteur aveugle.
 
 ### 3. Récupérer les clés du projet
 Dans Supabase : Project Settings → API → copier `Project URL` et `anon public key`.
@@ -82,15 +87,18 @@ La caméra nécessite HTTPS — Vercel le fournit automatiquement.
 
 ## Limites honnêtes de cette version
 
-- **La clé privée est techniquement exportable** (`extractable: true`)
-  pour permettre l'export de la clé publique en QR code. Une version
-  plus stricte utiliserait deux paires de clés distinctes ou une
-  dérivation qui évite ce compromis.
-- **Pas de vérification d'identité dans le temps** : si quelqu'un
-  intercepte le tout premier QR code (l'échange initial), il peut
-  s'insérer au milieu (attaque de l'homme du milieu). Signal résout ça
-  avec des "codes de sécurité" à comparer périodiquement — non
-  implémenté ici.
+- **Vérification d'identité au moment du handshake, pas dans la durée** :
+  un code de sécurité (dérivé des deux clés publiques) s'affiche dans le
+  chat pour être comparé à voix haute entre les deux téléphones, ce qui
+  détecte une interception du tout premier QR code (attaque de l'homme
+  du milieu). Mais rien ne re-vérifie ce code par la suite : si les
+  deux personnes ne le comparent jamais, l'attaque reste possible.
+- **Métadonnées exposées côté Supabase** : voir la note honnête plus
+  haut — la policy de lecture actuelle expose l'existence de tous les
+  salons à quiconque possède la clé anon, pas seulement à qui connaît
+  un `room_id`. Corriger ça proprement demande de revoir le modèle
+  d'accès (par ex. un relais auto-hébergé plutôt que Supabase), pas
+  seulement la policy SQL.
 - **Historique non persistant** : les messages ne sont pas stockés
   après fermeture de l'app (aucune base de données locale). À ajouter
   si besoin (IndexedDB, chiffré aussi).

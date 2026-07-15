@@ -24,7 +24,7 @@ export async function getOrCreateKeyPair() {
 
   const keyPair = await crypto.subtle.generateKey(
     { name: 'ECDH', namedCurve: 'P-256' },
-    true, // extractable : nécessaire pour pouvoir exporter la clé PUBLIQUE en QR code
+    false, // la clé publique reste exportable même à false ; ça évite que la clé PRIVÉE le soit
     ['deriveKey']
   );
   await set(KEYPAIR_STORAGE_KEY, keyPair);
@@ -83,6 +83,19 @@ export async function decryptMessage(sharedKey, b64) {
     ciphertext
   );
   return new TextDecoder().decode(plainBuf);
+}
+
+// Code de vérification affiché sur les deux appareils pour détecter une
+// attaque de l'homme du milieu lors de l'échange initial (comme les "codes
+// de sécurité" de Signal) : les deux clés publiques triées puis hachées
+// donnent la même valeur des deux côtés seulement si personne ne s'est
+// inséré au milieu du handshake.
+export async function computeSafetyNumber(pubKeyB64A, pubKeyB64B) {
+  const [first, second] = [pubKeyB64A, pubKeyB64B].sort();
+  const combined = new TextEncoder().encode(first + second);
+  const hash = await crypto.subtle.digest('SHA-256', combined);
+  const bytes = Array.from(new Uint8Array(hash)).slice(0, 5);
+  return bytes.map((b) => String(b).padStart(3, '0')).join(' ');
 }
 
 export function randomRoomId() {
