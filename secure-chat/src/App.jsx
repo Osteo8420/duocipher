@@ -5,97 +5,82 @@ import {
   getOrCreateKeyPair,
   exportPublicKeyB64,
   importPeerPublicKey,
-  deriveSharedKey,
-  encryptMessage,
-  decryptMessage,
+  deriveInitialRootKey,
   computeSafetyNumber,
   randomRoomId,
 } from './crypto.js';
-import { sendToRoom, subscribeToRoom } from './supabase.js';
+import { DoubleRatchet } from './ratchet.js';
+import { connectToRoom } from './relay.js';
 
 // Étapes de l'écran : home -> creating (attend le scan) -> scanning (caméra) -> chat
 export default function App() {
   const [screen, setScreen] = useState('home');
   const [roomId, setRoomId] = useState(null);
   const [myPublicKeyB64, setMyPublicKeyB64] = useState(null);
-  const [sharedKey, setSharedKey] = useState(null);
   const [safetyNumber, setSafetyNumber] = useState(null);
   const [messages, setMessages] = useState([]); // {mine: bool, text: string}
   const [draft, setDraft] = useState('');
   const [error, setError] = useState(null);
 
   const keyPairRef = useRef(null);
-  const unsubRef = useRef(null);
+  const ratchetRef = useRef(null);
+  const connectionRef = useRef(null);
 
   useEffect(() => {
     getOrCreateKeyPair().then(async (kp) => {
       keyPairRef.current = kp;
       setMyPublicKeyB64(await exportPublicKeyB64(kp.publicKey));
     });
-    return () => { if (unsubRef.current) unsubRef.current(); };
+    return () => { connectionRef.current?.close(); };
   }, []);
 
-  // --- Créer un salon (Personne A) ---
+  // --- Créer un salon (Personne A / "Bob") ---
   const startCreateRoom = () => {
     const id = randomRoomId();
     setRoomId(id);
     setScreen('creating');
-    unsubRef.current = subscribeToRoom(id, async (row) => {
-      const payload = row.payload;
-      if (payload.type === 'handshake' && !sharedKey) {
+    connectionRef.current = connectToRoom(id, async (payload) => {
+      if (payload.type === 'handshake' && !ratchetRef.current) {
         const peerPublicKey = await importPeerPublicKey(payload.pubKey);
-        const key = await deriveSharedKey(keyPairRef.current.privateKey, peerPublicKey);
-        setSharedKey(key);
+        const rootKey = await deriveInitialRootKey(keyPairRef.current.privateKey, peerPublicKey);
+        ratchetRef.current = DoubleRatchet.initAsResponder(rootKey, keyPairRef.current);
         setSafetyNumber(await computeSafetyNumber(myPublicKeyB64, payload.pubKey));
         setScreen('chat');
+      } else if (payload.type === 'msg' && ratchetRef.current) {
+        const text = await ratchetRef.current.decrypt(payload.header, payload.ciphertext);
+        setMessages((m) => [...m, { mine: false, text }]);
       }
     });
   };
 
-  // --- Rejoindre un salon (Personne B, via scan) ---
+  // --- Rejoindre un salon (Personne B / "Alice", via scan) ---
   const handleScanResult = useCallback(async (decodedText) => {
     try {
       const data = JSON.parse(decodedText);
       const peerPublicKey = await importPeerPublicKey(data.pubKey);
-      const key = await deriveSharedKey(keyPairRef.current.privateKey, peerPublicKey);
-      setSharedKey(key);
+      const rootKey = await deriveInitialRootKey(keyPairRef.current.privateKey, peerPublicKey);
+      ratchetRef.current = await DoubleRatchet.initAsInitiator(rootKey, data.pubKey);
       setSafetyNumber(await computeSafetyNumber(myPublicKeyB64, data.pubKey));
       setRoomId(data.roomId);
 
-      // Envoie sa propre clé publique en clair (une clé publique n'est pas un secret)
-      await sendToRoom(data.roomId, { type: 'handshake', pubKey: myPublicKeyB64 });
-
-      unsubRef.current = subscribeToRoom(data.roomId, async (row) => {
-        if (row.payload.type === 'msg') {
-          const text = await decryptMessage(key, row.payload.ciphertext);
+      connectionRef.current = connectToRoom(data.roomId, async (payload) => {
+        if (payload.type === 'msg') {
+          const text = await ratchetRef.current.decrypt(payload.header, payload.ciphertext);
           setMessages((m) => [...m, { mine: false, text }]);
         }
       });
+      // Envoie sa propre clé publique en clair (une clé publique n'est pas un secret)
+      connectionRef.current.send({ type: 'handshake', pubKey: myPublicKeyB64 });
       setScreen('chat');
     } catch (e) {
       setError('QR code invalide ou expiré.');
     }
   }, [myPublicKeyB64]);
 
-  // Une fois en chat côté créateur (A), il faut aussi écouter les messages entrants
-  useEffect(() => {
-    if (screen === 'chat' && roomId && sharedKey && unsubRef.current) {
-      // Ré-abonnement complet incluant les messages de chat (le premier abonnement
-      // ne traitait que le handshake côté créateur)
-      unsubRef.current();
-      unsubRef.current = subscribeToRoom(roomId, async (row) => {
-        if (row.payload.type === 'msg') {
-          const text = await decryptMessage(sharedKey, row.payload.ciphertext);
-          setMessages((m) => [...m, { mine: false, text }]);
-        }
-      });
-    }
-  }, [screen, roomId, sharedKey]);
-
   const sendMessage = async () => {
-    if (!draft.trim() || !sharedKey) return;
-    const ciphertext = await encryptMessage(sharedKey, draft);
-    await sendToRoom(roomId, { type: 'msg', ciphertext });
+    if (!draft.trim() || !ratchetRef.current) return;
+    const { header, ciphertext } = await ratchetRef.current.encrypt(draft);
+    connectionRef.current.send({ type: 'msg', header, ciphertext });
     setMessages((m) => [...m, { mine: true, text: draft }]);
     setDraft('');
   };
@@ -150,18 +135,23 @@ function Scanner({ onResult, onCancel, error }) {
   const regionId = 'qr-scanner-region';
   useEffect(() => {
     const scanner = new Html5Qrcode(regionId);
+    let started = false;
     scanner
       .start(
         { facingMode: 'environment' },
         { fps: 10, qrbox: 220 },
         (decodedText) => {
+          started = false;
           scanner.stop().catch(() => {});
           onResult(decodedText);
         },
         () => {}
       )
+      .then(() => { started = true; })
       .catch(() => {});
-    return () => { scanner.stop().catch(() => {}); };
+    // scanner.stop() rejette si start() n'a jamais réussi (caméra refusée/absente) ;
+    // ne l'appeler que si le scan est effectivement en cours.
+    return () => { if (started) scanner.stop().catch(() => {}); };
   }, [onResult]);
 
   return (
