@@ -3,7 +3,15 @@
 // données tierce. Le relais ne reçoit et ne retransmet que des blobs déjà
 // chiffrés — il ne peut techniquement rien déchiffrer.
 
-const RELAY_URL = import.meta.env.VITE_RELAY_URL || 'ws://localhost:8080';
+// Si VITE_RELAY_URL n'est pas défini, on suppose que le relais sert cette
+// page lui-même (déploiement combiné front+relais sur un seul serveur, voir
+// relay-server/README.md) et on se connecte à la même origine.
+function sameOriginRelayUrl() {
+  const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${scheme}//${window.location.host}`;
+}
+
+const RELAY_URL = import.meta.env.VITE_RELAY_URL || sameOriginRelayUrl();
 
 // Ouvre une connexion WebSocket vers un salon et l'utilise à la fois pour
 // écouter (onMessage) et pour envoyer (send) — une seule connexion par

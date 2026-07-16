@@ -28,38 +28,39 @@ lire, et il n'y a ni compte ni numéro de téléphone ni annuaire central.
    (`/relay-server`), qui ne fait que les retransmettre à l'autre appareil
    connecté au même salon — sans jamais les stocker ni les lire.
 
-## Mise en place (une seule fois)
+## Mise en place
 
-### 1. Lancer le relais
-
-Voir `/relay-server/README.md`. En local :
+### En développement (front et relais séparés, avec hot-reload)
 
 ```
+cd ../relay-server && npm install && npm start   # relais sur :8080
+cp .env.example .env                              # VITE_RELAY_URL=ws://localhost:8080
+npm install && npm run dev                        # app sur :5173
+```
+
+### En production : un seul serveur (recommandé)
+
+Le relais (`/relay-server`) peut aussi servir le build de l'app sur son
+propre port — un seul process à déployer, aucun hébergeur tiers (pas de
+Vercel). Voir `/relay-server/README.md` pour le détail ; en résumé :
+
+```
+npm run build            # génère secure-chat/dist
 cd ../relay-server
 npm install
-npm start
+npm start                 # sert l'app ET le relais sur le même port
 ```
 
-### 2. Configurer les variables d'environnement de l'app
+Pas de `VITE_RELAY_URL` à renseigner dans ce cas : l'app se connecte
+automatiquement à sa propre origine. Mettre un reverse proxy TLS
+(Caddy/nginx) devant pour du `https://`/`wss://` — la caméra l'exige.
 
-```
-cp .env.example .env
-# VITE_RELAY_URL=ws://localhost:8080 (ou wss://ton-domaine en prod)
-```
+### Alternative : front sur Vercel/Netlify, relais à part
 
-### 3. Tester en local
-
-```
-npm install
-npm run dev
-```
-
-### 4. Déployer
-
-L'app est un site statique (Vite build) : n'importe quel hébergeur statique
-convient (Vercel, Netlify, ou ton propre serveur). Le relais WebSocket, lui,
-doit tourner en continu — voir `/relay-server/README.md` pour le déployer
-sur un VPS derrière un reverse proxy TLS (`wss://`).
+Toujours possible si tu préfères garder les deux séparés : déployer
+`secure-chat/` (site statique) sur Vercel/Netlify, le relais ailleurs (VPS),
+et renseigner `VITE_RELAY_URL=wss://...` dans les variables d'environnement
+du front.
 
 Une fois en ligne, ouvrez l'URL sur les deux téléphones (Safari/Chrome).
 La caméra nécessite HTTPS.

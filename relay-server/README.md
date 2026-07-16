@@ -1,41 +1,61 @@
 # Relais auto-hébergé pour secure-chat
 
-Un serveur WebSocket minimal (une centaine de lignes, une seule
-dépendance : `ws`) qui relaie des blobs déjà chiffrés entre les deux
-appareils d'un salon. Il ne stocke rien sur disque et ne lit jamais le
-contenu des messages — il ne fait que retransmettre.
+Un serveur (une centaine de lignes, une seule dépendance : `ws`) qui
+relaie des blobs déjà chiffrés entre les deux appareils d'un salon. Il ne
+stocke rien sur disque et ne lit jamais le contenu des messages — il ne
+fait que retransmettre. En option, il sert aussi le build statique de
+l'app sur le même port, pour n'avoir qu'un seul serveur à déployer (pas
+besoin de Vercel/Netlify en plus).
 
-## Lancer en local
+## Déploiement combiné (front + relais sur un seul serveur) — recommandé
 
 ```
+cd ../secure-chat
+npm install
+npm run build        # génère secure-chat/dist
+
+cd ../relay-server
 npm install
 npm start
 ```
 
-Le serveur écoute par défaut sur le port 8080 (`PORT=xxxx npm start` pour
-changer). Il expose un unique endpoint WebSocket : `ws://host:port/?room=<id>`.
+Par défaut, `server.js` sert automatiquement `../secure-chat/dist` s'il
+existe (structure du dépôt : les deux dossiers côte à côte) — rien à
+configurer. Ouvre `http://localhost:8080` : l'app est servie, et se
+connecte au relais sur cette même origine sans avoir besoin de
+`VITE_RELAY_URL`.
 
 ## Déployer sur un VPS
 
-1. Copier ce dossier sur le serveur, `npm install --omit=dev`.
-2. Lancer en arrière-plan avec un gestionnaire de process (`pm2 start server.js`
+1. Cloner le dépôt sur le serveur (ou copier `relay-server/` + `secure-chat/`).
+2. `cd secure-chat && npm install && npm run build`
+3. `cd ../relay-server && npm install --omit=dev`
+4. Lancer en arrière-plan avec un gestionnaire de process (`pm2 start server.js`
    ou un service systemd).
-3. Mettre un reverse proxy TLS devant (nginx, Caddy) pour exposer du `wss://`
-   plutôt que du `ws://` en clair — la caméra du navigateur (scan QR) exige
-   déjà HTTPS côté app, autant chiffrer le transport WebSocket aussi (défense
-   en profondeur : le contenu est déjà chiffré de bout en bout, mais ça évite
-   de laisser voir en clair sur le réseau les métadonnées de connexion).
+5. Mettre un reverse proxy TLS devant (nginx, Caddy) — la caméra du
+   navigateur (scan QR) exige HTTPS, et ça chiffre aussi le transport
+   WebSocket (défense en profondeur : le contenu est déjà chiffré de bout
+   en bout, mais ça évite de laisser voir en clair les métadonnées de
+   connexion sur le réseau).
 
-Exemple minimal avec Caddy (`Caddyfile`) :
+Exemple minimal avec Caddy (`Caddyfile`) — un seul port à exposer, HTTP et
+WebSocket passent par le même reverse proxy :
 
 ```
-relay.tondomaine.fr {
+tondomaine.fr {
   reverse_proxy localhost:8080
 }
 ```
 
-4. Renseigner l'URL obtenue (`wss://relay.tondomaine.fr`) dans le `.env` de
-   l'app (`VITE_RELAY_URL`).
+C'est tout : pas de variable d'environnement à renseigner côté app, le
+front et le relais partagent la même origine.
+
+## Déploiement séparé (front sur Vercel/Netlify, relais à part)
+
+Toujours possible si tu préfères : ne lance que le relais (`STATIC_DIR=""
+npm start` pour désactiver la partie statique), déploie `secure-chat/`
+sur ton hébergeur statique préféré, et renseigne `VITE_RELAY_URL=wss://...`
+dans ses variables d'environnement.
 
 ## Limites honnêtes
 
